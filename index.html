@@ -157,16 +157,6 @@
             margin-bottom: 20px;
             border-left: 4px solid #3498db;
         }
-        .file-upload {
-            margin-top: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        .file-upload label {
-            margin-bottom: 10px;
-            font-weight: bold;
-        }
         .status {
             font-style: italic;
             color: #666;
@@ -180,11 +170,7 @@
         
         <div class="model-info">
             <p><strong>Model:</strong> ResNet TFLite Model for Tampering Detection</p>
-            <div class="file-upload">
-                <label for="model-upload">Load Model File (resnet_model.tflite):</label>
-                <input type="file" id="model-upload" accept=".tflite">
-                <p id="model-status" class="status">Model not loaded</p>
-            </div>
+            <p id="model-status" class="status">Loading model...</p>
         </div>
         
         <div class="upload-box" id="upload-box">
@@ -229,10 +215,8 @@
 
     <script>
         let tfliteModel;
-        let interpreter;
         let originalImage = null;
         
-        const modelUpload = document.getElementById('model-upload');
         const modelStatus = document.getElementById('model-status');
         const uploadBox = document.getElementById('upload-box');
         const fileUpload = document.getElementById('file-upload');
@@ -245,21 +229,24 @@
         const resultElement = document.getElementById('result');
         const confidenceElement = document.getElementById('confidence');
         
-        modelUpload.addEventListener('change', loadTFLiteModel);
         uploadBox.addEventListener('click', () => fileUpload.click());
         uploadBox.addEventListener('dragover', handleDragOver);
         uploadBox.addEventListener('drop', handleDrop);
         fileUpload.addEventListener('change', handleFileSelect);
         analyzeBtn.addEventListener('click', analyzeImage);
         
-        async function loadTFLiteModel(event) {
-            if (event.target.files.length === 0) return;
-            
+        loadTFLiteModel();
+        
+        async function loadTFLiteModel() {
             modelStatus.textContent = "Loading model...";
             
             try {
-                const file = event.target.files[0];
-                const arrayBuffer = await file.arrayBuffer();
+                const response = await fetch('resnet_model.tflite');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const arrayBuffer = await response.arrayBuffer();
                 
                 tfliteModel = await tflite.loadTFLiteModel(
                     new Uint8Array(arrayBuffer)
@@ -391,7 +378,7 @@
         
         async function analyzeImage() {
             if (!tfliteModel) {
-                alert('Please load the TFLite model first.');
+                alert('TFLite model not loaded yet. Please wait or check console for errors.');
                 return;
             }
             
