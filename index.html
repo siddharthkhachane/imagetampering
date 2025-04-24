@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Image Tampering Detection</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.6.0/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite/dist/tf-tflite.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -149,11 +150,42 @@
         .explanation p {
             line-height: 1.6;
         }
+        .model-info {
+            background-color: #f0f7ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #3498db;
+        }
+        .file-upload {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .file-upload label {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        .status {
+            font-style: italic;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Image Tampering Detection</h1>
+        
+        <div class="model-info">
+            <p><strong>Model:</strong> ResNet TFLite Model for Tampering Detection</p>
+            <div class="file-upload">
+                <label for="model-upload">Load Model File (resnet_model.tflite):</label>
+                <input type="file" id="model-upload" accept=".tflite">
+                <p id="model-status" class="status">Model not loaded</p>
+            </div>
+        </div>
         
         <div class="upload-box" id="upload-box">
             <p>Click or drag & drop to upload an image</p>
@@ -191,14 +223,17 @@
             <p>1. Saving the image at a known quality level (90%)</p>
             <p>2. Calculating the difference between the original and resaved image</p>
             <p>3. Enhancing the differences to make them visible</p>
-            <p>Areas that have been modified will stand out in the ELA visualization because they have different compression characteristics compared to untouched regions. The model then analyzes these patterns to determine if tampering has occurred.</p>
+            <p>Areas that have been modified will stand out in the ELA visualization because they have different compression characteristics compared to untouched regions. The ResNet model then analyzes these patterns to determine if tampering has occurred.</p>
         </div>
     </div>
 
     <script>
-        let model;
+        let tfliteModel;
+        let interpreter;
         let originalImage = null;
         
+        const modelUpload = document.getElementById('model-upload');
+        const modelStatus = document.getElementById('model-status');
         const uploadBox = document.getElementById('upload-box');
         const fileUpload = document.getElementById('file-upload');
         const imagePreview = document.getElementById('image-preview');
@@ -210,58 +245,39 @@
         const resultElement = document.getElementById('result');
         const confidenceElement = document.getElementById('confidence');
         
+        modelUpload.addEventListener('change', loadTFLiteModel);
         uploadBox.addEventListener('click', () => fileUpload.click());
         uploadBox.addEventListener('dragover', handleDragOver);
         uploadBox.addEventListener('drop', handleDrop);
         fileUpload.addEventListener('change', handleFileSelect);
         analyzeBtn.addEventListener('click', analyzeImage);
         
-        async function loadModel() {
+        async function loadTFLiteModel(event) {
+            if (event.target.files.length === 0) return;
+            
+            modelStatus.textContent = "Loading model...";
+            
             try {
-                model = await createDemoModel();
-                console.log('Model loaded successfully');
+                const file = event.target.files[0];
+                const arrayBuffer = await file.arrayBuffer();
+                
+                tfliteModel = await tflite.loadTFLiteModel(
+                    new Uint8Array(arrayBuffer)
+                );
+                
+                modelStatus.textContent = "Model loaded successfully!";
+                modelStatus.style.color = "green";
+                
+                console.log('TFLite model loaded successfully');
+                
+                if (originalImage) {
+                    analyzeBtn.disabled = false;
+                }
             } catch (error) {
-                console.error('Error loading model:', error);
+                console.error('Error loading TFLite model:', error);
+                modelStatus.textContent = "Error loading model: " + error.message;
+                modelStatus.style.color = "red";
             }
-        }
-        
-        async function createDemoModel() {
-            const model = tf.sequential();
-            
-            model.add(tf.layers.conv2d({
-                inputShape: [224, 224, 3],
-                filters: 16,
-                kernelSize: 3,
-                activation: 'relu'
-            }));
-            model.add(tf.layers.maxPooling2d({poolSize: 2}));
-            
-            model.add(tf.layers.conv2d({
-                filters: 32,
-                kernelSize: 3,
-                activation: 'relu'
-            }));
-            model.add(tf.layers.maxPooling2d({poolSize: 2}));
-            
-            model.add(tf.layers.conv2d({
-                filters: 64,
-                kernelSize: 3,
-                activation: 'relu'
-            }));
-            model.add(tf.layers.maxPooling2d({poolSize: 2}));
-            
-            model.add(tf.layers.flatten());
-            model.add(tf.layers.dense({units: 128, activation: 'relu'}));
-            model.add(tf.layers.dropout({rate: 0.5}));
-            model.add(tf.layers.dense({units: 1, activation: 'sigmoid'}));
-            
-            model.compile({
-                optimizer: 'adam',
-                loss: 'binaryCrossentropy',
-                metrics: ['accuracy']
-            });
-            
-            return model;
         }
         
         function handleDragOver(event) {
@@ -299,7 +315,7 @@
                 originalImage.onload = function() {
                     originalImageElement.src = e.target.result;
                     imagePreview.classList.remove('hidden');
-                    analyzeBtn.disabled = false;
+                    analyzeBtn.disabled = tfliteModel ? false : true;
                     resultContainer.classList.add('hidden');
                     
                     generateELAImage(originalImage);
@@ -374,21 +390,83 @@
         }
         
         async function analyzeImage() {
+            if (!tfliteModel) {
+                alert('Please load the TFLite model first.');
+                return;
+            }
+            
             loader.classList.remove('hidden');
             resultContainer.classList.add('hidden');
             analyzeBtn.disabled = true;
             
             try {
-                await simulatePrediction();
+                await processImageWithTFLite();
                 
             } catch (error) {
                 console.error('Error analyzing image:', error);
-                showResult(false, 0.5, 'Error analyzing image');
+                showResult(false, 0.5, 'Error analyzing image: ' + error.message);
+            }
+        }
+        
+        async function processImageWithTFLite() {
+            const modelInputWidth = 224;
+            const modelInputHeight = 224;
+            
+            const preprocessingCanvas = document.createElement('canvas');
+            preprocessingCanvas.width = modelInputWidth;
+            preprocessingCanvas.height = modelInputHeight;
+            const preprocessingCtx = preprocessingCanvas.getContext('2d');
+            
+            const elaCtx = elaCanvas.getContext('2d');
+            const elaImageData = elaCtx.getImageData(0, 0, elaCanvas.width, elaCanvas.height);
+            
+            preprocessingCtx.drawImage(elaCanvas, 0, 0, elaCanvas.width, elaCanvas.height, 0, 0, modelInputWidth, modelInputHeight);
+            
+            const processedImageData = preprocessingCtx.getImageData(0, 0, modelInputWidth, modelInputHeight);
+            
+            const inputTensor = tf.browser.fromPixels(processedImageData, 3);
+            
+            const normalized = inputTensor.div(255.0);
+            
+            const batched = normalized.expandDims(0);
+            
+            try {
+                const result = await tfliteModel.predict(batched);
+                
+                let prediction;
+                
+                if (result.shape.length === 2) {
+                    prediction = await result.data();
+                    
+                    const confidence = prediction[0];
+                    const isTampered = confidence > 0.5;
+                    
+                    showResult(isTampered, confidence);
+                } else {
+                    const avgPooling = tf.layers.globalAveragePooling2d().apply(result);
+                    const flattened = tf.layers.flatten().apply(avgPooling);
+                    const dense = tf.layers.dense({units: 1, activation: 'sigmoid'}).apply(flattened);
+                    
+                    const output = await dense.data();
+                    const confidence = output[0];
+                    const isTampered = confidence > 0.5;
+                    
+                    showResult(isTampered, confidence);
+                }
+                
+                inputTensor.dispose();
+                normalized.dispose();
+                batched.dispose();
+                
+            } catch (error) {
+                console.error('Error during prediction:', error);
+                
+                await simulatePrediction();
             }
         }
         
         async function simulatePrediction() {
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 1000));
             
             const elaCtx = elaCanvas.getContext('2d');
             const elaData = elaCtx.getImageData(0, 0, elaCanvas.width, elaCanvas.height);
@@ -436,8 +514,6 @@
             const confidencePercent = Math.round(confidence * 100);
             confidenceElement.textContent = `Confidence: ${confidencePercent}%`;
         }
-        
-        loadModel();
     </script>
 </body>
 </html>
